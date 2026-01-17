@@ -1,4 +1,4 @@
-name: Build Pro Suite
+name: Build Installer
 
 on:
   push:
@@ -23,10 +23,15 @@ jobs:
         pip install pyinstaller
 
     - name: Build EXE
-      run: pyinstaller --noconsole --onefile --collect-all customtkinter --collect-all keyboard script.py
+      run: pyinstaller --noconsole --onefile --collect-all customtkinter --collect-all pystray --collect-all PIL --collect-all keyboard script.py
 
-    - name: Upload Artifact
+    - name: Build Setup Wizard
+      uses: Minionguyjosh/INNO-Setup-Action@v1.0.0
+      with:
+        path: setup.iss
+        
+    - name: Upload Installer
       uses: actions/upload-artifact@v4
       with:
-        name: Pro-Suite-App
-        path: dist/script.exe
+        name: SmartClipboard_Setup
+        path: Output/SmartClipboard_Setup.exe

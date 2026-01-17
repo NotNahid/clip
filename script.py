@@ -1,212 +1,151 @@
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
-import threading
-import time
 import pyperclip
+import keyboard
+import threading
+import sqlite3
+import time
+import pystray
+from PIL import Image, ImageDraw
+import sys
 import os
-import json
-import datetime
-import keyboard  # For Global Hotkeys
-import subprocess
 
-# --- 0. CONFIGURATION MANAGER (The Brain) ---
-CONFIG_FILE = "app_config.json"
-DEFAULT_CONFIG = {
-    "save_path": os.path.expanduser("~/Documents"),
-    "hotkey": "ctrl+shift+z",
-    "clipboard_active": False
-}
+# --- 1. DATABASE ENGINE ---
+class Database:
+    def __init__(self):
+        self.conn = sqlite3.connect("clipboard_history.db", check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT UNIQUE,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.commit()
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-    try:
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return DEFAULT_CONFIG
+    def add_clip(self, text):
+        try:
+            self.cursor.execute("DELETE FROM history WHERE content = ?", (text,))
+            self.cursor.execute("INSERT INTO history (content) VALUES (?)", (text,))
+            self.conn.commit()
+        except Exception as e:
+            print(f"DB Error: {e}")
 
-def save_config(config_data):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config_data, f, indent=4)
+    def get_clips(self, search_query=""):
+        if search_query:
+            self.cursor.execute("SELECT content FROM history WHERE content LIKE ? ORDER BY id DESC LIMIT 50", ('%' + search_query + '%',))
+        else:
+            self.cursor.execute("SELECT content FROM history ORDER BY id DESC LIMIT 50")
+        return [row[0] for row in self.cursor.fetchall()]
 
-# Global Config Object
-APP_CONFIG = load_config()
+db = Database()
 
-# --- 1. CLIPBOARD HISTORY WINDOW (The UI Popup) ---
-class ClipboardUI(ctk.CTkToplevel):
-    def __init__(self, history):
+# --- 2. THE UI ---
+class QuickPasteApp(ctk.CTkToplevel):
+    def __init__(self):
         super().__init__()
-        self.title("Clipboard History")
+        self.withdraw()
+        self.overrideredirect(True) 
+        self.attributes("-topmost", True)
         self.geometry("400x500")
-        self.attributes("-topmost", True) # Keep window on top
+        self.configure(fg_color="#1a1a1a")
         
-        self.label = ctk.CTkLabel(self, text="Recent Clips", font=("Arial", 20, "bold"))
-        self.label.pack(pady=10)
+        self.search_var = ctk.StringVar()
+        self.search_var.trace("w", self.update_list)
+        self.entry = ctk.CTkEntry(
+            self, placeholder_text="Search clips...", 
+            textvariable=self.search_var,
+            font=("Segoe UI", 14), height=40, border_width=0, fg_color="#333"
+        )
+        self.entry.pack(fill="x", padx=5, pady=5)
+        self.entry.bind("<Escape>", self.hide_window)
 
-        # Scrollable list
-        self.scroll_frame = ctk.CTkScrollableFrame(self, width=380, height=450)
-        self.scroll_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        self.buttons = []
+        self.refresh_ui()
 
-        for item in reversed(history):
+    def show_window(self):
+        try:
+            x, y = self.winfo_pointerxy()
+            self.geometry(f"+{x}+{y}")
+        except:
+            pass
+        self.deiconify()
+        self.entry.focus_set()
+        self.entry.delete(0, 'end')
+        self.refresh_ui()
+
+    def hide_window(self, event=None):
+        self.withdraw()
+
+    def refresh_ui(self):
+        for btn in self.buttons:
+            btn.destroy()
+        self.buttons = []
+
+        query = self.search_var.get()
+        clips = db.get_clips(query)
+
+        for clip in clips:
+            display_text = clip.replace("\n", " ")[:45] + "..." if len(clip) > 45 else clip
             btn = ctk.CTkButton(
                 self.scroll_frame, 
-                text=item[:40] + "..." if len(item) > 40 else item, 
-                command=lambda t=item: self.copy_to_clipboard(t),
-                anchor="w",
-                fg_color="#2B2B2B"
+                text=display_text, 
+                anchor="w", 
+                fg_color="transparent", 
+                hover_color="#0078D7",
+                height=35,
+                command=lambda c=clip: self.paste_clip(c)
             )
-            btn.pack(fill="x", pady=2)
+            btn.pack(fill="x")
+            self.buttons.append(btn)
 
-    def copy_to_clipboard(self, text):
-        pyperclip.copy(text)
-        self.destroy() # Close window after selection
+    def update_list(self, *args):
+        self.refresh_ui()
 
-# --- 2. BACKEND MODULES ---
-class ClipboardManager:
-    def __init__(self):
-        self.active = False
-        self.thread = None
-        self.last_text = ""
-        self.history = []
-        
-        # Setup Hotkey Listener
+    def paste_clip(self, content):
+        pyperclip.copy(content)
+        self.hide_window()
+        time.sleep(0.1)
+        keyboard.send("ctrl+v")
+
+# --- 3. BACKGROUND WORKER ---
+def clipboard_monitor():
+    last_text = ""
+    while True:
         try:
-            keyboard.add_hotkey(APP_CONFIG["hotkey"], self.open_history_ui)
+            current_text = pyperclip.paste()
+            if current_text and current_text != last_text:
+                last_text = current_text
+                db.add_clip(current_text)
         except:
-            print("Could not register hotkey (requires Admin on some systems)")
+            pass
+        time.sleep(0.5)
 
-    def start(self):
-        if not self.active:
-            self.active = True
-            self.thread = threading.Thread(target=self._run_loop, daemon=True)
-            self.thread.start()
+# --- 4. TRAY ICON ---
+def create_tray_icon(root):
+    image = Image.new('RGB', (64, 64), color=(0, 120, 215))
+    d = ImageDraw.Draw(image)
+    d.rectangle([16, 16, 48, 48], fill="white")
+    
+    def quit_app(icon, item):
+        icon.stop()
+        root.quit()
+        sys.exit()
 
-    def stop(self):
-        self.active = False
-
-    def open_history_ui(self):
-        # Must run on main thread, usually tricky in Tkinter from background thread
-        # For simplicity in this structure, we trigger it only if history exists
-        if self.history:
-            # Note: In a complex app, we'd use a queue. Here we assume thread safety works for simple UI spawn.
-            ClipboardUI(self.history)
-
-    def _run_loop(self):
-        while self.active:
-            try:
-                current_text = pyperclip.paste()
-                if current_text and current_text != self.last_text:
-                    self.last_text = current_text
-                    self.history.append(current_text)
-                    self._save_to_file(current_text)
-                    
-                    if len(self.history) > 20: 
-                        self.history.pop(0)
-            except:
-                pass
-            time.sleep(1.0)
-
-    def _save_to_file(self, text):
-        folder = APP_CONFIG["save_path"]
-        file_path = os.path.join(folder, "clipboard_history.txt")
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        try:
-            with open(file_path, "a", encoding="utf-8") as f:
-                f.write(f"[{timestamp}]\n{text}\n{'-'*30}\n")
-        except Exception as e:
-            print(f"Save Error: {e}")
-
-# Initialize Engines
-clipboard_engine = ClipboardManager()
-
-# --- 3. FRONTEND DASHBOARD ---
-
-class ProductivitySuite(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-
-        # Window Setup
-        self.title("Productivity Station Pro")
-        self.geometry("900x600")
-        ctk.set_appearance_mode("Dark")
-        
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-
-        # Sidebar
-        self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        
-        self.logo = ctk.CTkLabel(self.sidebar, text="⚡ PRO SUITE", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo.grid(row=0, column=0, padx=20, pady=(20, 10))
-
-        # Main Area
-        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-
-        # CLIPBOARD CARD
-        self.create_clipboard_card()
-
-    def create_clipboard_card(self):
-        card = ctk.CTkFrame(self.main_frame, height=150)
-        card.pack(fill="x", pady=10)
-        
-        # Title
-        lbl = ctk.CTkLabel(card, text="📋 Clipboard Manager", font=ctk.CTkFont(size=18, weight="bold"))
-        lbl.pack(anchor="w", padx=20, pady=(15, 5))
-
-        # Status Label
-        self.lbl_path = ctk.CTkLabel(card, text=f"Saving to: {APP_CONFIG['save_path']}")
-        self.lbl_path.pack(anchor="w", padx=20, pady=5)
-
-        # Controls Row
-        ctrl_frame = ctk.CTkFrame(card, fg_color="transparent")
-        ctrl_frame.pack(fill="x", padx=10, pady=10)
-
-        # 1. Change Folder Button
-        btn_folder = ctk.CTkButton(ctrl_frame, text="📂 Set Folder", width=100, command=self.change_folder)
-        btn_folder.pack(side="left", padx=10)
-
-        # 2. Open Text File Button
-        btn_open = ctk.CTkButton(ctrl_frame, text="📄 Open Log", width=100, fg_color="#555", command=self.open_log_file)
-        btn_open.pack(side="left", padx=10)
-
-        # 3. Toggle Switch
-        self.switch_var = ctk.StringVar(value="on" if APP_CONFIG["clipboard_active"] else "off")
-        self.switch = ctk.CTkSwitch(ctrl_frame, text="Active", command=self.toggle_clipboard, variable=self.switch_var, onvalue="on", offvalue="off")
-        self.switch.pack(side="right", padx=20)
-        
-        # Auto-start if it was on previously
-        if APP_CONFIG["clipboard_active"]:
-            self.switch.select()
-            clipboard_engine.start()
-
-    def change_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            APP_CONFIG["save_path"] = folder
-            save_config(APP_CONFIG)
-            self.lbl_path.configure(text=f"Saving to: {folder}")
-
-    def open_log_file(self):
-        file_path = os.path.join(APP_CONFIG["save_path"], "clipboard_history.txt")
-        if os.path.exists(file_path):
-            os.startfile(file_path) # Windows only command
-        else:
-            messagebox.showinfo("Info", "No history file created yet.")
-
-    def toggle_clipboard(self):
-        if self.switch.get() == "on":
-            APP_CONFIG["clipboard_active"] = True
-            clipboard_engine.start()
-        else:
-            APP_CONFIG["clipboard_active"] = False
-            clipboard_engine.stop()
-        save_config(APP_CONFIG)
+    icon = pystray.Icon("DittoClone", image, "Smart Clipboard", menu=pystray.Menu(
+        pystray.MenuItem("Exit", quit_app)
+    ))
+    return icon
 
 if __name__ == "__main__":
-    app = ProductivitySuite()
-    app.mainloop()
+    root = ctk.CTk()
+    root.withdraw()
+    app_window = QuickPasteApp()
+    threading.Thread(target=clipboard_monitor, daemon=True).start()
+    keyboard.add_hotkey("ctrl+shift+v", app_window.show_window)
+    tray = create_tray_icon(root)
+    threading.Thread(target=tray.run, daemon=True).start()
+    root.mainloop()

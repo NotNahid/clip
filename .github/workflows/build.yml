@@ -19,12 +19,14 @@ jobs:
 
     - name: Install Dependencies
       run: |
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
 
-    # Step 1: Create the raw EXE
+    # Step 1: Create the raw EXE with ICON
     - name: Build EXE
-      run: pyinstaller --noconsole --onefile --collect-all customtkinter --collect-all pystray --collect-all PIL --collect-all keyboard script.py
+      # We add --icon=app.ico AND --add-data to ensure the file is inside the package
+      run: pyinstaller --noconsole --onefile --icon=app.ico --add-data "app.ico;." --collect-all customtkinter --collect-all pystray --collect-all PIL --collect-all keyboard script.py
 
     # Step 2: Install Inno Setup (The Standard Way)
     - name: Install Inno Setup

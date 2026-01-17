@@ -22,14 +22,19 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
+    # Step 1: Create the raw EXE
     - name: Build EXE
       run: pyinstaller --noconsole --onefile --collect-all customtkinter --collect-all pystray --collect-all PIL --collect-all keyboard script.py
 
-    - name: Build Setup Wizard
-      uses: Minionguyjosh/INNO-Setup-Action@v1.0.0
-      with:
-        path: setup.iss
-        
+    # Step 2: Install Inno Setup (The Standard Way)
+    - name: Install Inno Setup
+      run: choco install innosetup
+
+    # Step 3: Compile the Setup Wizard
+    - name: Compile Setup Wizard
+      run: iscc setup.iss
+
+    # Step 4: Upload the Setup File
     - name: Upload Installer
       uses: actions/upload-artifact@v4
       with:

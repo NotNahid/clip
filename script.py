@@ -9,10 +9,25 @@ from PIL import Image, ImageDraw
 import sys
 import os
 
-# --- 1. DATABASE ENGINE ---
+# --- 1. SETUP DATA PATH (The Fix) ---
+# We locate the authorized "AppData" folder for the user
+APP_NAME = "SmartClipboardPro"
+if os.name == 'nt':
+    data_dir = os.path.join(os.getenv('APPDATA'), APP_NAME)
+else:
+    data_dir = os.path.join(os.path.expanduser("~"), ".local", "share", APP_NAME)
+
+# Create the folder if it doesn't exist
+if not os.path.exists(data_dir):
+    os.makedirs(data_dir)
+
+DB_PATH = os.path.join(data_dir, "clipboard_history.db")
+
+# --- 2. DATABASE ENGINE ---
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect("clipboard_history.db", check_same_thread=False)
+        # We now connect to the DB in the safe folder
+        self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS history (
@@ -40,7 +55,7 @@ class Database:
 
 db = Database()
 
-# --- 2. THE UI ---
+# --- 3. THE UI ---
 class QuickPasteApp(ctk.CTkToplevel):
     def __init__(self):
         super().__init__()
@@ -111,7 +126,7 @@ class QuickPasteApp(ctk.CTkToplevel):
         time.sleep(0.1)
         keyboard.send("ctrl+v")
 
-# --- 3. BACKGROUND WORKER ---
+# --- 4. BACKGROUND WORKER ---
 def clipboard_monitor():
     last_text = ""
     while True:
@@ -124,7 +139,7 @@ def clipboard_monitor():
             pass
         time.sleep(0.5)
 
-# --- 4. TRAY ICON ---
+# --- 5. TRAY ICON ---
 def create_tray_icon(root):
     image = Image.new('RGB', (64, 64), color=(0, 120, 215))
     d = ImageDraw.Draw(image)

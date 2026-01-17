@@ -16,7 +16,7 @@ WizardStyle=modern
 OutputBaseFilename=SmartClipboard_Setup
 Compression=lzma
 SolidCompression=yes
-CpuGauges=yes
+; CpuGauges=yes  <-- REMOVED THIS LINE
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

@@ -9,24 +9,31 @@ from PIL import Image, ImageDraw
 import sys
 import os
 
-# --- 1. SETUP DATA PATH (The Fix) ---
-# We locate the authorized "AppData" folder for the user
+# --- 0. RESOURCE HELPER (The Magic Fix) ---
+# This function finds the icon file whether running as code OR as an EXE
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# --- 1. SETUP DATA PATH ---
 APP_NAME = "SmartClipboardPro"
 if os.name == 'nt':
     data_dir = os.path.join(os.getenv('APPDATA'), APP_NAME)
 else:
     data_dir = os.path.join(os.path.expanduser("~"), ".local", "share", APP_NAME)
 
-# Create the folder if it doesn't exist
 if not os.path.exists(data_dir):
     os.makedirs(data_dir)
 
 DB_PATH = os.path.join(data_dir, "clipboard_history.db")
+ICON_PATH = resource_path("app.ico") # <--- WE LOAD THE ICON HERE
 
 # --- 2. DATABASE ENGINE ---
 class Database:
     def __init__(self):
-        # We now connect to the DB in the safe folder
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.cursor.execute("""
@@ -64,6 +71,12 @@ class QuickPasteApp(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.geometry("400x500")
         self.configure(fg_color="#1a1a1a")
+        
+        # TRY TO SET WINDOW ICON
+        try:
+            self.after(200, lambda: self.iconbitmap(ICON_PATH))
+        except:
+            pass # Skip if icon fails to load
         
         self.search_var = ctk.StringVar()
         self.search_var.trace("w", self.update_list)
@@ -141,16 +154,20 @@ def clipboard_monitor():
 
 # --- 5. TRAY ICON ---
 def create_tray_icon(root):
-    image = Image.new('RGB', (64, 64), color=(0, 120, 215))
-    d = ImageDraw.Draw(image)
-    d.rectangle([16, 16, 48, 48], fill="white")
+    # Use the custom icon file if available, otherwise fallback to blue square
+    try:
+        image = Image.open(ICON_PATH)
+    except:
+        image = Image.new('RGB', (64, 64), color=(0, 120, 215))
+        d = ImageDraw.Draw(image)
+        d.rectangle([16, 16, 48, 48], fill="white")
     
     def quit_app(icon, item):
         icon.stop()
         root.quit()
         sys.exit()
 
-    icon = pystray.Icon("DittoClone", image, "Smart Clipboard", menu=pystray.Menu(
+    icon = pystray.Icon("SmartClipboard", image, "Smart Clipboard", menu=pystray.Menu(
         pystray.MenuItem("Exit", quit_app)
     ))
     return icon
@@ -158,6 +175,13 @@ def create_tray_icon(root):
 if __name__ == "__main__":
     root = ctk.CTk()
     root.withdraw()
+    
+    # Try setting root icon too
+    try:
+        root.iconbitmap(ICON_PATH)
+    except:
+        pass
+
     app_window = QuickPasteApp()
     threading.Thread(target=clipboard_monitor, daemon=True).start()
     keyboard.add_hotkey("ctrl+shift+v", app_window.show_window)

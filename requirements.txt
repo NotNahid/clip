@@ -1,0 +1,5 @@
+customtkinter
+pyperclip
+watchdog
+keyboard
+packaging
